@@ -17,6 +17,7 @@ describe('backupService', () => {
     const addition = await addNoteAddition(note.id, 'thought', '后来想到的理解')
     await softDeleteAddition(addition.id)
     await restoreAddition(addition.id)
+    await db.syncMetadata.put({ id: 'singleton', cursor: 7, status: 'synced', enabledAt: '2026-09-14T00:00:00.000Z' })
     await markBackupExported('2026-09-15T00:00:00.000Z')
     const backup = await createBackup()
     expect(backup.notes[0].sourceTitleSnapshot).toBe('局外人')
@@ -24,6 +25,8 @@ describe('backupService', () => {
     expect(backup.noteAdditions[0].deletedAt).toBeUndefined()
     expect('deviceMetadata' in backup).toBe(false)
     expect(JSON.stringify(backup)).not.toContain('lastExportedAt')
+    expect('syncMetadata' in backup).toBe(false)
+    expect((await db.syncMetadata.get('singleton'))?.cursor).toBe(7)
   })
 
   it('可往返恢复笔记和追加内容，且不覆盖设备元数据', async () => {

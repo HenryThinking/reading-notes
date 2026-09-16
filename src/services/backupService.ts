@@ -1,6 +1,8 @@
 import { db, defaultSettings } from '../db/database'
-import type { BackupEnvelopeV1 } from '../domain/models'
+import type { BackupEnvelopeV1, SyncEntityPayload, SyncEntityType } from '../domain/models'
 import { backupEnvelopeSchema } from '../domain/validation'
+import { scheduleSync } from './syncService'
+import { makeOutboxEntry } from './outboxService'
 
 export interface ImportPlan {
   parsed: BackupEnvelopeV1
@@ -21,16 +23,16 @@ export async function createBackup(): Promise<BackupEnvelopeV1> {
     version: 1,
     exportedAt: new Date().toISOString(),
     appVersion: '0.1.0',
-    sources,
-    notes,
-    noteAdditions,
-    settings: settings ?? defaultSettings
+    sources: sources.map((item) => ({ ...item, serverVersion: 0, syncStatus: 'pending' as const })),
+    notes: notes.map((note) => ({ ...note, serverVersion: 0, syncStatus: 'pending' as const })),
+    noteAdditions: noteAdditions.map((item) => ({ ...item, serverVersion: 0, syncStatus: 'pending' as const })),
+    settings: { ...(settings ?? defaultSettings), serverVersion: 0, syncStatus: 'pending' }
   }
 }
 
 export async function markBackupExported(exportedAt: string) {
   // 设备本地元数据独立保存，不由 createBackup 读取，也不由导入流程写入。
-  await db.deviceMetadata.put({ id: 'singleton', lastExportedAt: exportedAt })
+  await db.deviceMetadata.put({ ...(await db.deviceMetadata.get('singleton')), id: 'singleton', lastExportedAt: exportedAt })
 }
 
 export function parseBackup(input: unknown): BackupEnvelopeV1 {
@@ -79,21 +81,31 @@ export async function analyzeBackup(input: unknown): Promise<ImportPlan> {
   }), { added: 0, updated: 0, skipped: 0, parsed })
 }
 
-async function mergeRecords<T extends VersionedRecord>(incoming: T[], get: (id: string) => Promise<T | undefined>, put: (item: T) => Promise<unknown>) {
+async function mergeRecords<T extends VersionedRecord & SyncEntityPayload>(entityType: SyncEntityType, incoming: T[], get: (id: string) => Promise<T | undefined>, put: (item: T) => Promise<unknown>) {
   for (const item of incoming) {
     const existing = await get(item.id)
-    if (!existing || new Date(item.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) await put(item)
+    if (!existing || new Date(item.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+      const normalized = { ...item, serverVersion: 0, syncStatus: 'pending' as const } as T
+      await put(normalized)
+      await db.syncOutbox.put(makeOutboxEntry(entityType, normalized))
+    }
   }
 }
 
 export async function importBackup(plan: ImportPlan) {
   const backup = plan.parsed
-  await db.transaction('rw', db.sources, db.notes, db.noteAdditions, db.settings, async () => {
-    await mergeRecords(backup.sources, (id) => db.sources.get(id), (item) => db.sources.put(item))
-    await mergeRecords(backup.notes, (id) => db.notes.get(id), (item) => db.notes.put(item))
-    await mergeRecords(backup.noteAdditions, (id) => db.noteAdditions.get(id), (item) => db.noteAdditions.put(item))
-    await db.settings.put(backup.settings)
+  await db.transaction('rw', db.sources, db.notes, db.noteAdditions, db.settings, db.syncOutbox, async () => {
+    await mergeRecords('source', backup.sources, (id) => db.sources.get(id), (item) => db.sources.put(item))
+    await mergeRecords('note', backup.notes,
+      (id) => db.notes.get(id),
+      (item) => db.notes.put(item)
+    )
+    await mergeRecords('noteAddition', backup.noteAdditions, (id) => db.noteAdditions.get(id), (item) => db.noteAdditions.put(item))
+    const settings = { ...backup.settings, serverVersion: 0, syncStatus: 'pending' as const }
+    await db.settings.put(settings)
+    await db.syncOutbox.put(makeOutboxEntry('settings', settings))
   })
+  scheduleSync()
 }
 
 export function downloadBackup(backup: BackupEnvelopeV1) {

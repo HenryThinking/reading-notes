@@ -1,0 +1,2 @@
+SYNC_PASSWORD=replace-with-a-strong-local-password
+SESSION_SECRET=replace-with-at-least-32-random-bytes

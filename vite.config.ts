@@ -27,6 +27,14 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [
+          { urlPattern: /\/api\//, method: 'GET', handler: 'NetworkOnly' },
+          { urlPattern: /\/api\//, method: 'POST', handler: 'NetworkOnly' },
+          { urlPattern: /\/api\//, method: 'PUT', handler: 'NetworkOnly' },
+          { urlPattern: /\/api\//, method: 'PATCH', handler: 'NetworkOnly' },
+          { urlPattern: /\/api\//, method: 'DELETE', handler: 'NetworkOnly' }
+        ],
         globPatterns: ['**/*.{js,css,html,svg,png,ico}']
       },
       devOptions: { enabled: false }

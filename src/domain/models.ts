@@ -2,6 +2,9 @@ export type NoteContext = 'reading' | 'life'
 export type SourceKind = 'book' | 'article' | 'podcast' | 'conversation' | 'other'
 export type AdditionKind = 'thought' | 'example'
 export type Theme = 'system' | 'light' | 'dark'
+export type SyncStatus = 'pending' | 'synced' | 'conflict'
+export type SyncEntityType = 'source' | 'note' | 'noteAddition' | 'settings'
+export type SyncUiStatus = 'unauthenticated' | 'syncing' | 'synced' | 'offline' | 'error' | 'conflict'
 
 export interface Source {
   id: string
@@ -11,6 +14,9 @@ export interface Source {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 export interface Note {
@@ -32,6 +38,9 @@ export interface Note {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 export interface NoteAddition {
@@ -42,6 +51,9 @@ export interface NoteAddition {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 export interface Draft {
@@ -55,12 +67,46 @@ export interface AppSettings {
   theme: Theme
   dailyReviewLimit: 5 | 10 | 20
   schemaVersion: number
+  updatedAt: string
+  serverVersion: number
+  syncStatus: SyncStatus
 }
 
 /** 仅属于当前浏览器设备；禁止进入备份或云同步。 */
 export interface DeviceMetadata {
   id: 'singleton'
   lastExportedAt?: string
+}
+
+export interface SyncLocalMetadata {
+  id: 'singleton'
+  cursor: number
+  status: SyncUiStatus
+  enabledAt?: string
+  lastSyncedAt?: string
+  lastError?: string
+}
+
+export interface SyncOutboxEntry {
+  id: string
+  entityType: SyncEntityType
+  entityId: string
+  baseVersion: number
+  queuedAt: string
+  updatedAt: string
+  attempts: number
+  lastError?: string
+}
+
+export interface SyncConflict {
+  id: string
+  entityType: SyncEntityType
+  entityId: string
+  localPayload: SyncEntityPayload
+  remotePayload: SyncEntityPayload
+  remoteVersion: number
+  createdAt: string
+  resolvedAt?: string
 }
 
 export interface NoteInput {
@@ -86,3 +132,27 @@ export interface BackupEnvelopeV1 {
 }
 
 export type ReviewAction = 'again' | 'remembered' | 'familiar'
+
+export type SyncEntityPayload = Source | Note | NoteAddition | AppSettings
+
+export interface SyncChange {
+  id: string
+  entityType: SyncEntityType
+  baseVersion: number
+  payload: SyncEntityPayload
+}
+
+export interface SyncServerChange {
+  id: string
+  entityType: SyncEntityType
+  serverVersion: number
+  payload: SyncEntityPayload
+}
+
+export interface SyncResponse {
+  accepted: Array<{ id: string; entityType: SyncEntityType; serverVersion: number }>
+  conflicts: SyncServerChange[]
+  changes: SyncServerChange[]
+  cursor: number
+  hasMore: boolean
+}

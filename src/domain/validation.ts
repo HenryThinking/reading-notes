@@ -9,7 +9,10 @@ export const sourceSchema = z.object({
   author: z.string().optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
-  deletedAt: isoDate.optional()
+  deletedAt: isoDate.optional(),
+  serverVersion: z.number().int().nonnegative().default(0),
+  syncStatus: z.enum(['pending', 'synced', 'conflict']).default('pending'),
+  conflictOf: z.string().uuid().optional()
 })
 
 export const noteSchema = z.object({
@@ -30,7 +33,10 @@ export const noteSchema = z.object({
   nextReviewAt: isoDate.optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
-  deletedAt: isoDate.optional()
+  deletedAt: isoDate.optional(),
+  serverVersion: z.number().int().nonnegative().default(0),
+  syncStatus: z.enum(['pending', 'synced', 'conflict']).default('pending'),
+  conflictOf: z.string().uuid().optional()
 })
 
 export const noteAdditionSchema = z.object({
@@ -40,14 +46,20 @@ export const noteAdditionSchema = z.object({
   content: z.string().trim().min(1),
   createdAt: isoDate,
   updatedAt: isoDate,
-  deletedAt: isoDate.optional()
+  deletedAt: isoDate.optional(),
+  serverVersion: z.number().int().nonnegative().default(0),
+  syncStatus: z.enum(['pending', 'synced', 'conflict']).default('pending'),
+  conflictOf: z.string().uuid().optional()
 })
 
 export const settingsSchema = z.object({
   id: z.literal('singleton'),
   theme: z.enum(['system', 'light', 'dark']),
   dailyReviewLimit: z.union([z.literal(5), z.literal(10), z.literal(20)]),
-  schemaVersion: z.number().int().positive()
+  schemaVersion: z.number().int().positive(),
+  updatedAt: isoDate.default('2026-01-01T00:00:00.000Z'),
+  serverVersion: z.number().int().nonnegative().default(0),
+  syncStatus: z.enum(['pending', 'synced', 'conflict']).default('pending')
 })
 
 export const noteInputSchema = z.object({

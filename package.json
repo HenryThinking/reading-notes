@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
+    "types:functions": "wrangler types",
+    "d1:migrate:local": "wrangler d1 migrations apply DB --local",
+    "dev:pages": "npm run build && wrangler pages dev dist",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -48,6 +51,7 @@
     "typescript-eslint": "^8.70.0",
     "vite": "^8.3.0",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "wrangler": "^4.132.0"
   }
 }

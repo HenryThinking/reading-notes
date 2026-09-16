@@ -6,7 +6,7 @@ function noteAt(stage: number): Note {
   return {
     id: '00000000-0000-4000-8000-000000000001', context: 'life', sourceTitleSnapshot: '', excerpt: '原文', reflection: '', tags: [],
     isFavorite: false, reviewEnabled: true, reviewStage: stage, reviewCount: 0,
-    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z'
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', serverVersion: 0, syncStatus: 'pending'
   }
 }
 

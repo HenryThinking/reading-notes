@@ -27,7 +27,7 @@
 
 - 首位用户为产品所有者本人，界面语言为简体中文。
 - 主要在 iPhone 上记录和复习，也可能在 Windows 浏览器中使用。
-- 首版允许不同设备的数据彼此独立；多端同步在第二阶段实现。
+- 核心记录体验始终 local-first；第二阶段已确定采用 Cloudflare Pages Functions + D1 提供可选的多端同步。
 - 内容以纯文本为主，暂不依赖相机 OCR、AI 或复杂富文本。
 - 应用默认私密，不接入广告、第三方统计和公开分享。
 
@@ -127,7 +127,7 @@
 
 | 模块 | 功能 | 价值 |
 | --- | --- | --- |
-| 多端同步 | Supabase 邮箱登录、云端同步、冲突处理 | iPhone 与 Windows 使用同一数据 |
+| 多端同步 | Cloudflare Pages Functions + D1、个人密码登录、云端同步、冲突处理 | iPhone 与 Windows 使用同一数据 |
 | 快捷输入 | 系统分享目标、剪贴板粘贴增强 | 从网页/阅读 App 更快摘录；按平台渐进增强 |
 | 复习 | 每日数量 5/10/20、自定义复习开关 | 控制负担，部分内容可不进入复习 |
 | 书籍 | 封面、阅读状态、书籍归档 | 提升书架浏览体验 |
@@ -258,11 +258,12 @@
 
 ## 9. 数据模型
 
-所有 ID 使用 `crypto.randomUUID()`；时间保存为 ISO 8601 UTC 字符串，显示时转换为本地时间。使用软删除字段为未来同步保留删除墓碑。
+所有业务实体 ID 使用 `crypto.randomUUID()`；时间保存为 ISO 8601 UTC 字符串，显示时转换为本地时间。同步实体都使用软删除墓碑和服务器版本号。
 
 ```ts
 type NoteContext = 'reading' | 'life'
 type SourceKind = 'book' | 'article' | 'podcast' | 'conversation' | 'other'
+type SyncStatus = 'pending' | 'synced' | 'conflict'
 
 interface Source {
   id: string
@@ -272,6 +273,9 @@ interface Source {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 interface Note {
@@ -293,6 +297,9 @@ interface Note {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 type AdditionKind = 'thought' | 'example'
@@ -305,6 +312,9 @@ interface NoteAddition {
   createdAt: string
   updatedAt: string
   deletedAt?: string
+  serverVersion: number
+  syncStatus: SyncStatus
+  conflictOf?: string
 }
 
 interface Draft {
@@ -318,11 +328,33 @@ interface AppSettings {
   theme: 'system' | 'light' | 'dark'
   dailyReviewLimit: 5 | 10 | 20
   schemaVersion: number
+  updatedAt: string
+  serverVersion: number
+  syncStatus: SyncStatus
 }
 
 interface DeviceMetadata {
   id: 'singleton'
-  lastExportedAt?: string    // 仅当前设备使用，不进入备份导入或未来云同步
+  lastExportedAt?: string    // 仅当前设备使用，不进入备份导入或云同步
+}
+
+interface SyncLocalMetadata {
+  id: 'singleton'
+  cursor: number
+  status: 'unauthenticated' | 'syncing' | 'synced' | 'offline' | 'error' | 'conflict'
+  enabledAt?: string
+  lastSyncedAt?: string
+  lastError?: string
+}
+
+interface SyncOutboxEntry {
+  id: string                // `${entityType}:${entityId}`
+  entityType: 'source' | 'note' | 'noteAddition' | 'settings'
+  entityId: string
+  baseVersion: number
+  queuedAt: string
+  updatedAt: string
+  attempts: number
 }
 
 interface BackupEnvelopeV1 {
@@ -340,17 +372,20 @@ interface BackupEnvelopeV1 {
 ### 9.1 IndexedDB / Dexie 表与索引
 
 ```ts
-sources: 'id, kind, title, updatedAt, deletedAt'
-notes: 'id, context, sourceId, updatedAt, createdAt, nextReviewAt, deletedAt, *tags'
-noteAdditions: 'id, noteId, kind, createdAt, updatedAt, deletedAt'
+sources: 'id, kind, title, updatedAt, deletedAt, syncStatus, serverVersion'
+notes: 'id, context, sourceId, updatedAt, createdAt, nextReviewAt, deletedAt, syncStatus, serverVersion, *tags'
+noteAdditions: 'id, noteId, kind, createdAt, updatedAt, deletedAt, syncStatus, serverVersion'
 drafts: 'id, updatedAt'
-settings: 'id'
+settings: 'id, syncStatus, serverVersion'
 deviceMetadata: 'id'
+syncMetadata: 'id, status'
+syncOutbox: 'id, entityType, entityId, queuedAt, [entityType+entityId]'
+syncConflicts: 'id, entityType, entityId, createdAt, resolvedAt'
 ```
 
-`deviceMetadata` 是设备本地元数据表。备份服务和未来同步服务禁止读取或写入该表。
+`deviceMetadata`、`syncMetadata`、`syncOutbox` 和 `syncConflicts` 是设备本地基础设施表。业务备份不得导入或覆盖它们；其中只有 outbox 所指向的业务实体会发送到云端。
 
-笔记创建时必须立即根据所选书籍或生活来源写入 `sourceTitleSnapshot`。移除书籍时只解除 `sourceId`，已有快照保持不变。新增、编辑或软删除追加内容时更新父笔记的 `updatedAt`，但不重置复习阶段；父笔记软删除时追加内容随之隐藏，恢复后重新显示，彻底删除时在同一事务中级联删除。
+笔记创建时必须立即根据所选书籍或生活来源写入 `sourceTitleSnapshot`。移除书籍时只解除 `sourceId`，已有快照保持不变。新增、编辑或软删除追加内容时更新父笔记的 `updatedAt`，但不重置复习阶段；父笔记软删除时追加内容随之隐藏，恢复后重新显示。同步启用后不提供物理删除，笔记、来源和追加内容均保留墓碑。
 
 注意：IndexedDB 不把布尔值作为有效 key，因此 `isFavorite` 与 `reviewEnabled` 不建立索引，在已缩小的结果集中筛选。Dexie 索引用于常用排序和筛选；对原文/感悟的“包含搜索”首版可在查询出未删除集合后，以标准化后的字符串进行内存过滤。目标数据量为 1 万条以内文本笔记。若真实数据量或性能测试显示不足，再引入专门全文检索库，不要过早复杂化。
 
@@ -461,24 +496,21 @@ public/
 
 ## 12. 第二阶段：多端同步设计
 
-推荐使用 Supabase：Auth + Postgres + Row Level Security。它不是 P0 依赖，但 P0 必须保留稳定 UUID、`updatedAt`、`deletedAt`，使后续同步无需重建数据。
+第二阶段正式采用 **Cloudflare Pages Functions + D1**。Dexie/IndexedDB 仍是唯一的界面数据源，D1 仅承担跨设备同步；前端不得直接连接 D1，也不得包含数据库 ID、密码或固定密钥。所有云端请求使用同源 `/api/*`。
 
-建议云端表：
-
-- `profiles`
-- `sources`
-- `notes`
-- `user_settings`
+同步实体：`sources`、`notes`、独立的 `noteAdditions`、可跨设备的用户设置。不同步：`drafts`、`deviceMetadata`、`lastExportedAt`、Service Worker 缓存。
 
 同步原则：
 
-1. UI 始终读写本地 Dexie。
-2. 联网后后台推送本地变更并拉取远端变更。
-3. 每条远端记录必须有 `user_id`，RLS 只允许本人访问。
-4. 删除使用墓碑，所有设备确认同步后再做远端清理。
-5. MVP 同步冲突可用“服务器更新时间 + 最后写入胜出”，但需要记录冲突日志；不要完全依赖设备时钟。
-6. 首次登录前提示用户将本地数据合并到云端，不静默覆盖。
-7. 云同步不等于端到端加密；涉及敏感生活感悟时必须在产品中如实说明。
+1. UI 始终先读写本地 Dexie，本地数据与 outbox 在同一事务中提交；云端故障不得阻塞新增、编辑、删除、搜索和复习。
+2. 应用启动、网络恢复和手动同步时推送 pending outbox 并拉取 D1 增量变更。`/api/*` 不得被 Service Worker 缓存。
+3. 第一版为个人单用户应用。用户在设置页输入密码，Pages Function 使用 Cloudflare Secret `SYNC_PASSWORD` 校验；成功后只下发 `HttpOnly + Secure + SameSite=Strict` Cookie。会话签名使用独立的 `SESSION_SECRET`，并校验同源写请求。
+4. 首次开启同步前必须生成并下载本地 JSON 备份，然后执行合并；不得清空或静默覆盖本地 IndexedDB 或 D1。
+5. 删除使用 `deletedAt` 墓碑，恢复也作为新版本同步，不即时物理删除。
+6. D1 使用服务器端 `revision`。客户端提交 `baseVersion` 做 compare-and-swap；版本不一致时返回冲突，保留云端原记录并将本地内容保存为可见“冲突副本”，禁止以设备 `updatedAt` 静默决胜。
+7. D1 表结构只通过版本化 migration 管理，查询使用 prepared statements。远端 migration 前先只读检查既有表和数据；非空则停止。
+8. `/api/*` 响应使用 `Cache-Control: no-store`。同步状态至少包括未登录、同步中、已同步、离线待同步、同步失败、发生冲突。
+9. 云同步不等于端到端加密；涉及敏感生活感悟时必须在产品中如实说明。
 
 ## 13. 视觉与交互方向
 
@@ -587,7 +619,7 @@ MVP 只有满足以下条件才能称为完成：
 ### 阶段 5：第二阶段评估
 
 - 使用本地版 1–2 周，确认记录字段和复习频率是否合适。
-- 若确实同时使用 iPhone 与 Windows，再接入 Supabase 同步。
+- 若确实同时使用 iPhone 与 Windows，启用已实现的 Cloudflare D1 可选同步，并持续验证合并和冲突体验。
 
 ## 19. 交给 Codex Local 的执行提示词
 
@@ -619,7 +651,7 @@ MVP 只有满足以下条件才能称为完成：
 2. 主色（默认：低饱和墨绿色）。
 3. 生活记录是否显示标题字段（默认：不强制标题，仅显示可选来源）。
 4. 每日复习上限（默认：10 条，并在设置中提供 5/10/20）。
-5. 第二阶段是否需要多端同步（默认：本地版稳定使用后接 Supabase）。
+5. 第二阶段是否需要多端同步（已确认：使用 Cloudflare Pages Functions + D1，保持 Dexie local-first）。
 
 ## 21. 技术依据
 

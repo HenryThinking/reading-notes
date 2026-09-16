@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reading-notes-git",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "./dist",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "reading-notes-db",
+      "database_id": "f5cf016b-42b8-4741-8c85-b33537f22daa",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

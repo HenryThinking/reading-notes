@@ -5,6 +5,8 @@ import { nextLocalNineAM } from '../lib/date'
 import { createId } from '../lib/ids'
 import { normalizeTags } from '../lib/text'
 import { calculateReviewUpdate } from '../services/reviewService'
+import { scheduleSync } from '../services/syncService'
+import { makeOutboxEntry } from '../services/outboxService'
 
 async function resolveSourceSnapshot(input: NoteInput) {
   if (input.context === 'life') return input.sourceLabel?.trim() ?? ''
@@ -30,9 +32,15 @@ export async function createNote(rawInput: NoteInput): Promise<Note> {
     reviewCount: 0,
     nextReviewAt: input.reviewEnabled ? nextLocalNineAM(now, 1).toISOString() : undefined,
     createdAt: now.toISOString(),
-    updatedAt: now.toISOString()
+    updatedAt: now.toISOString(),
+    serverVersion: 0,
+    syncStatus: 'pending'
   }
-  await db.notes.add(note)
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.add(note)
+    await db.syncOutbox.put(makeOutboxEntry('note', note))
+  })
+  scheduleSync()
   return note
 }
 
@@ -46,7 +54,8 @@ export async function updateNote(id: string, rawInput: NoteInput) {
   const sourceChanged = input.context !== existing.context
     || input.sourceId !== existing.sourceId
     || (input.sourceLabel?.trim() || undefined) !== existing.sourceLabel
-  await db.notes.update(id, {
+  const now = new Date().toISOString()
+  const updated: Note = { ...existing,
     ...input,
     sourceLabel: input.sourceLabel?.trim() || undefined,
     sourceTitleSnapshot: sourceChanged ? await resolveSourceSnapshot(input) : existing.sourceTitleSnapshot,
@@ -55,41 +64,67 @@ export async function updateNote(id: string, rawInput: NoteInput) {
     location: input.location?.trim() || undefined,
     tags: normalizeTags(input.tags),
     nextReviewAt,
-    updatedAt: new Date().toISOString()
+    updatedAt: now,
+    syncStatus: 'pending'
+  }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
   })
+  scheduleSync()
 }
 
 export async function toggleFavorite(id: string) {
   const note = await db.notes.get(id)
   if (!note) return
-  await db.notes.update(id, { isFavorite: !note.isFavorite, updatedAt: new Date().toISOString() })
+  const now = new Date().toISOString()
+  const updated = { ...note, isFavorite: !note.isFavorite, updatedAt: now, syncStatus: 'pending' as const }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
+  })
+  scheduleSync()
 }
 
 export async function setReviewEnabled(id: string, enabled: boolean) {
   const note = await db.notes.get(id)
   if (!note || note.deletedAt) throw new Error('笔记不存在')
-  await db.notes.update(id, {
+  const now = new Date().toISOString()
+  const updated: Note = { ...note,
     reviewEnabled: enabled,
     nextReviewAt: enabled ? note.nextReviewAt ?? nextLocalNineAM(new Date(), 1).toISOString() : undefined,
-    updatedAt: new Date().toISOString()
+    updatedAt: now,
+    syncStatus: 'pending'
+  }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
   })
+  scheduleSync()
 }
 
 export async function softDeleteNote(id: string) {
   const now = new Date().toISOString()
-  await db.notes.update(id, { deletedAt: now, updatedAt: now })
+  const note = await db.notes.get(id)
+  if (!note) return
+  const updated: Note = { ...note, deletedAt: now, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
+  })
+  scheduleSync()
 }
 
 export async function restoreNote(id: string) {
-  await db.notes.update(id, { deletedAt: undefined, updatedAt: new Date().toISOString() })
-}
-
-export async function permanentlyDeleteNote(id: string) {
-  await db.transaction('rw', db.notes, db.noteAdditions, db.drafts, async () => {
-    await db.noteAdditions.where('noteId').equals(id).delete()
-    await db.drafts.delete(`edit-${id}`)
-    await db.notes.delete(id)
+  const note = await db.notes.get(id)
+  if (!note) return
+  const now = new Date().toISOString()
+  const updated: Note = { ...note, deletedAt: undefined, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
   })
+  scheduleSync()
 }
 
 export async function addNoteAddition(noteId: string, kind: AdditionKind, content: string): Promise<NoteAddition> {
@@ -98,11 +133,14 @@ export async function addNoteAddition(noteId: string, kind: AdditionKind, conten
   const note = await db.notes.get(noteId)
   if (!note || note.deletedAt) throw new Error('笔记不存在')
   const now = new Date().toISOString()
-  const addition: NoteAddition = { id: createId(), noteId, kind, content: clean, createdAt: now, updatedAt: now }
-  await db.transaction('rw', db.notes, db.noteAdditions, async () => {
+  const addition: NoteAddition = { id: createId(), noteId, kind, content: clean, createdAt: now, updatedAt: now, serverVersion: 0, syncStatus: 'pending' }
+  const updatedNote: Note = { ...note, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.noteAdditions, db.syncOutbox, async () => {
     await db.noteAdditions.add(addition)
-    await db.notes.update(noteId, { updatedAt: now })
+    await db.notes.put(updatedNote)
+    await db.syncOutbox.bulkPut([makeOutboxEntry('noteAddition', addition, now), makeOutboxEntry('note', updatedNote, now)])
   })
+  scheduleSync()
   return addition
 }
 
@@ -112,44 +150,57 @@ export async function updateNoteAddition(id: string, content: string) {
   if (!addition || addition.deletedAt) throw new Error('追加内容不存在')
   if (!clean) throw new Error('追加内容不能为空')
   const now = new Date().toISOString()
-  await db.transaction('rw', db.notes, db.noteAdditions, async () => {
-    await db.noteAdditions.update(id, { content: clean, updatedAt: now })
-    await db.notes.update(addition.noteId, { updatedAt: now })
+  const note = await db.notes.get(addition.noteId)
+  if (!note) throw new Error('父笔记不存在')
+  const updatedAddition: NoteAddition = { ...addition, content: clean, updatedAt: now, syncStatus: 'pending' }
+  const updatedNote: Note = { ...note, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.noteAdditions, db.syncOutbox, async () => {
+    await db.noteAdditions.put(updatedAddition)
+    await db.notes.put(updatedNote)
+    await db.syncOutbox.bulkPut([makeOutboxEntry('noteAddition', updatedAddition, now), makeOutboxEntry('note', updatedNote, now)])
   })
+  scheduleSync()
 }
 
 export async function softDeleteAddition(id: string) {
   const addition = await db.noteAdditions.get(id)
   if (!addition) return
   const now = new Date().toISOString()
-  await db.transaction('rw', db.notes, db.noteAdditions, async () => {
-    await db.noteAdditions.update(id, { deletedAt: now, updatedAt: now })
-    await db.notes.update(addition.noteId, { updatedAt: now })
+  const note = await db.notes.get(addition.noteId)
+  if (!note) return
+  const updatedAddition: NoteAddition = { ...addition, deletedAt: now, updatedAt: now, syncStatus: 'pending' }
+  const updatedNote: Note = { ...note, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.noteAdditions, db.syncOutbox, async () => {
+    await db.noteAdditions.put(updatedAddition)
+    await db.notes.put(updatedNote)
+    await db.syncOutbox.bulkPut([makeOutboxEntry('noteAddition', updatedAddition, now), makeOutboxEntry('note', updatedNote, now)])
   })
+  scheduleSync()
 }
 
 export async function restoreAddition(id: string) {
   const addition = await db.noteAdditions.get(id)
   if (!addition) return
   const now = new Date().toISOString()
-  await db.transaction('rw', db.notes, db.noteAdditions, async () => {
-    await db.noteAdditions.update(id, { deletedAt: undefined, updatedAt: now })
-    await db.notes.update(addition.noteId, { updatedAt: now })
+  const note = await db.notes.get(addition.noteId)
+  if (!note) return
+  const updatedAddition: NoteAddition = { ...addition, deletedAt: undefined, updatedAt: now, syncStatus: 'pending' }
+  const updatedNote: Note = { ...note, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.noteAdditions, db.syncOutbox, async () => {
+    await db.noteAdditions.put(updatedAddition)
+    await db.notes.put(updatedNote)
+    await db.syncOutbox.bulkPut([makeOutboxEntry('noteAddition', updatedAddition, now), makeOutboxEntry('note', updatedNote, now)])
   })
-}
-
-export async function permanentlyDeleteAddition(id: string) {
-  const addition = await db.noteAdditions.get(id)
-  if (!addition) return
-  const now = new Date().toISOString()
-  await db.transaction('rw', db.notes, db.noteAdditions, async () => {
-    await db.noteAdditions.delete(id)
-    await db.notes.update(addition.noteId, { updatedAt: now })
-  })
+  scheduleSync()
 }
 
 export async function reviewNote(id: string, action: ReviewAction) {
   const note = await db.notes.get(id)
   if (!note || note.deletedAt || !note.reviewEnabled) throw new Error('笔记不在复习队列中')
-  await db.notes.update(id, calculateReviewUpdate(note, action))
+  const updated: Note = { ...note, ...calculateReviewUpdate(note, action), syncStatus: 'pending' }
+  await db.transaction('rw', db.notes, db.syncOutbox, async () => {
+    await db.notes.put(updated)
+    await db.syncOutbox.put(makeOutboxEntry('note', updated, updated.updatedAt))
+  })
+  scheduleSync()
 }

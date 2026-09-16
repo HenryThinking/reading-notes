@@ -6,4 +6,7 @@ test-results/
 .vite/
 *.local
 *.log
-
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/

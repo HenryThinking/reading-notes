@@ -1,6 +1,8 @@
 import { db } from '../db/database'
 import type { Source } from '../domain/models'
 import { createId } from '../lib/ids'
+import { scheduleSync } from '../services/syncService'
+import { makeOutboxEntry } from '../services/outboxService'
 
 export async function createBook(title: string, author?: string): Promise<Source> {
   const now = new Date().toISOString()
@@ -10,10 +12,16 @@ export async function createBook(title: string, author?: string): Promise<Source
     title: title.trim(),
     author: author?.trim() || undefined,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    serverVersion: 0,
+    syncStatus: 'pending'
   }
   if (!source.title) throw new Error('书名不能为空')
-  await db.sources.add(source)
+  await db.transaction('rw', db.sources, db.syncOutbox, async () => {
+    await db.sources.add(source)
+    await db.syncOutbox.put(makeOutboxEntry('source', source, now))
+  })
+  scheduleSync()
   return source
 }
 
@@ -23,18 +31,34 @@ export async function updateBook(id: string, title: string, author?: string) {
   const nextTitle = title.trim()
   if (!nextTitle) throw new Error('书名不能为空')
   const now = new Date().toISOString()
-  await db.transaction('rw', db.sources, db.notes, async () => {
-    await db.sources.update(id, { title: nextTitle, author: author?.trim() || undefined, updatedAt: now })
+  const updatedSource: Source = { ...source, title: nextTitle, author: author?.trim() || undefined, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.sources, db.notes, db.syncOutbox, async () => {
+    await db.sources.put(updatedSource)
+    await db.syncOutbox.put(makeOutboxEntry('source', updatedSource, now))
     const notes = await db.notes.where('sourceId').equals(id).toArray()
-    await Promise.all(notes.map((note) => db.notes.update(note.id, { sourceTitleSnapshot: nextTitle, updatedAt: now })))
+    for (const note of notes) {
+      const updated = { ...note, sourceTitleSnapshot: nextTitle, updatedAt: now, syncStatus: 'pending' as const }
+      await db.notes.put(updated)
+      await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
+    }
   })
+  scheduleSync()
 }
 
 export async function removeBookKeepingNotes(id: string) {
   const now = new Date().toISOString()
-  await db.transaction('rw', db.sources, db.notes, async () => {
-    await db.sources.update(id, { deletedAt: now, updatedAt: now })
+  const source = await db.sources.get(id)
+  if (!source) return
+  const updatedSource: Source = { ...source, deletedAt: now, updatedAt: now, syncStatus: 'pending' }
+  await db.transaction('rw', db.sources, db.notes, db.syncOutbox, async () => {
+    await db.sources.put(updatedSource)
+    await db.syncOutbox.put(makeOutboxEntry('source', updatedSource, now))
     const notes = await db.notes.where('sourceId').equals(id).toArray()
-    await Promise.all(notes.map((note) => db.notes.update(note.id, { sourceId: undefined, updatedAt: now })))
+    for (const note of notes) {
+      const updated = { ...note, sourceId: undefined, updatedAt: now, syncStatus: 'pending' as const }
+      await db.notes.put(updated)
+      await db.syncOutbox.put(makeOutboxEntry('note', updated, now))
+    }
   })
+  scheduleSync()
 }
