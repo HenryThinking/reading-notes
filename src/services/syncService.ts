@@ -2,10 +2,14 @@ import { db } from '../db/database'
 import type { Note, NoteAddition, Source, SyncChange, SyncConflict, SyncEntityPayload, SyncEntityType, SyncResponse, SyncServerChange } from '../domain/models'
 import { createId } from '../lib/ids'
 import { makeOutboxEntry, outboxId, readSyncEntity, seedOutboxFromLocalData, writeSyncEntity } from './outboxService'
+import { getAuthSnapshot, refreshAuthSession, rejectSyncSession } from './authService'
 
 const MAX_CHANGES_PER_REQUEST = 50
 let activeSync: Promise<void> | undefined
 let syncTimer: ReturnType<typeof setTimeout> | undefined
+let resumeTask: Promise<void> | undefined
+let backupTask: Promise<boolean> | undefined
+let backupReady = false
 
 function withRemoteState(payload: SyncEntityPayload, serverVersion: number): SyncEntityPayload {
   return { ...payload, serverVersion, syncStatus: 'synced' } as SyncEntityPayload
@@ -67,7 +71,7 @@ async function applyResponse(response: SyncResponse, sent: SyncChange[]) {
     }
     for (const remote of response.conflicts) {
       const key = outboxId(remote.entityType, remote.id)
-      const local = sentByKey.get(key)?.payload
+      const local = await readSyncEntity(remote.entityType, remote.id)
       if (local) await createConflictCopy(remote.entityType, local, remote)
       await applyRemote(remote)
       await db.syncOutbox.delete(key)
@@ -89,12 +93,12 @@ async function applyResponse(response: SyncResponse, sent: SyncChange[]) {
   })
 }
 
-async function updateSyncFailure(message: string, unauthenticated = false) {
+async function updateSyncFailure(message: string) {
   const current = await db.syncMetadata.get('singleton')
   await db.syncMetadata.put({
     id: 'singleton', cursor: current?.cursor ?? 0, enabledAt: current?.enabledAt,
     lastSyncedAt: current?.lastSyncedAt,
-    status: unauthenticated ? 'unauthenticated' : navigator.onLine ? 'error' : 'offline', lastError: message
+    status: navigator.onLine ? 'error' : 'offline', lastError: message
   })
 }
 
@@ -102,18 +106,23 @@ async function performSync() {
   const metadata = await db.syncMetadata.get('singleton')
   if (!metadata?.enabledAt) throw new Error('请先备份并开启云同步')
   if (!navigator.onLine) throw new Error('当前处于离线状态')
+  if (getAuthSnapshot().status !== 'authenticated') throw new Error('请先确认登录会话')
   await db.syncMetadata.update('singleton', { status: 'syncing', lastError: undefined })
 
   let cursor = metadata.cursor
+  // Every round drains cloud changes first, including first login on a new device.
+  // Pending local versions are preserved as conflict copies by applyResponse.
+  let pulling = true
   let hasMore = true
   while (hasMore) {
-    const changes = await getPendingChanges()
+    if (getAuthSnapshot().status !== 'authenticated') throw new Error('请先确认登录会话')
+    const changes = pulling ? [] : await getPendingChanges()
     const response = await fetch('/api/sync', {
-      method: 'POST', credentials: 'same-origin',
+      method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       body: JSON.stringify({ cursor, changes })
     })
-    if (response.status === 401) throw new Error('登录已失效，请重新登录')
+    if (response.status === 401) { rejectSyncSession(); throw new Error('登录已失效，请重新登录') }
     if (!response.ok) {
       const detail = await response.json().catch(() => undefined) as { error?: string } | undefined
       throw new Error(detail?.error || `同步请求失败（${response.status}）`)
@@ -121,35 +130,12 @@ async function performSync() {
     const result = await response.json() as SyncResponse
     await applyResponse(result, changes)
     cursor = result.cursor
+    await db.syncMetadata.update('singleton', { cursor })
+    if (pulling && !result.hasMore) pulling = false
     hasMore = result.hasMore || await db.syncOutbox.count() > 0
   }
   const conflictCount = await db.syncConflicts.filter((item) => !item.resolvedAt).count()
   await db.syncMetadata.update('singleton', { cursor, status: conflictCount ? 'conflict' : 'synced', lastSyncedAt: new Date().toISOString(), lastError: undefined })
-}
-
-export async function login(password: string) {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST', credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-    body: JSON.stringify({ password })
-  })
-  if (!response.ok) throw new Error(response.status === 401 ? '登录密码不正确' : '登录失败')
-}
-
-export async function logout() {
-  await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin', headers: { 'Cache-Control': 'no-store' } })
-  await db.syncMetadata.update('singleton', { status: 'unauthenticated' })
-}
-
-export async function refreshAuthSession() {
-  if (!navigator.onLine) {
-    await db.syncMetadata.update('singleton', { status: 'offline' })
-    return false
-  }
-  const response = await fetch('/api/auth/session', { credentials: 'same-origin', cache: 'no-store' }).catch(() => undefined)
-  const authenticated = response?.ok === true
-  if (!authenticated) await db.syncMetadata.update('singleton', { status: 'unauthenticated' })
-  return authenticated
 }
 
 export async function enableSync() {
@@ -159,11 +145,39 @@ export async function enableSync() {
   await syncNow()
 }
 
+export async function backupBeforeFirstSync() {
+  if ((await db.syncMetadata.get('singleton'))?.enabledAt) return true
+  if (backupReady) return true
+  if (!backupTask) backupTask = (async () => {
+    if (!window.confirm('首次开启同步前会先下载本地 JSON 备份，再拉取云端并安全合并；不会清空当前数据。是否继续？')) return false
+    const { createBackup, downloadBackup, markBackupExported } = await import('./backupService')
+    const backup = await createBackup()
+    downloadBackup(backup)
+    await markBackupExported(backup.exportedAt)
+    backupReady = true
+    return true
+  })().finally(() => { backupTask = undefined })
+  return backupTask
+}
+
+export function resumeSync(): Promise<void> {
+  if (!resumeTask) resumeTask = (async () => {
+    if (!await refreshAuthSession()) return
+    if (!navigator.onLine) { await db.syncMetadata.update('singleton', { status: 'offline' }); return }
+    if (!(await db.syncMetadata.get('singleton'))?.enabledAt) {
+      if (await backupBeforeFirstSync()) await enableSync()
+    } else await syncNow()
+  })().catch(async (error: unknown) => {
+    await updateSyncFailure(error instanceof Error ? error.message : '同步恢复失败')
+  }).finally(() => { resumeTask = undefined })
+  return resumeTask
+}
+
 export function syncNow(): Promise<void> {
   if (!activeSync) {
     activeSync = performSync().catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : '同步失败'
-      await updateSyncFailure(message, message.includes('登录'))
+      await updateSyncFailure(message)
       throw error
     }).finally(() => { activeSync = undefined })
   }
@@ -173,7 +187,7 @@ export function syncNow(): Promise<void> {
 export function scheduleSync(delay = 700) {
   if (typeof window === 'undefined') return
   void db.syncMetadata.get('singleton').then((metadata) => {
-    if (!metadata?.enabledAt) return
+    if (!metadata?.enabledAt || getAuthSnapshot().status !== 'authenticated') return
     if (!navigator.onLine) {
       void db.syncMetadata.update('singleton', { status: 'offline' })
       return

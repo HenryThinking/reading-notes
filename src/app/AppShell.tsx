@@ -3,7 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { useTheme } from '../hooks/useTheme'
 import { UpdatePrompt } from '../components/ui/UpdatePrompt'
 import { useEffect } from 'react'
-import { refreshAuthSession, scheduleSync } from '../services/syncService'
+import { resumeSync } from '../services/syncService'
 
 const navigation = [
   { to: '/', label: '首页', icon: Home, end: true },
@@ -15,10 +15,17 @@ const navigation = [
 export function AppShell() {
   useTheme()
   useEffect(() => {
-    void refreshAuthSession().then((authenticated) => { if (authenticated) scheduleSync(0) })
-    const handleOnline = () => { void refreshAuthSession().then((authenticated) => { if (authenticated) scheduleSync(0) }) }
-    window.addEventListener('online', handleOnline)
-    return () => window.removeEventListener('online', handleOnline)
+    const resume = () => { void resumeSync() }
+    const handleVisibility = () => { if (document.visibilityState === 'visible') resume() }
+    resume()
+    window.addEventListener('online', resume)
+    window.addEventListener('focus', resume)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      window.removeEventListener('online', resume)
+      window.removeEventListener('focus', resume)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [])
   return (
     <div className="app-shell">

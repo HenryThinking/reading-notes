@@ -6,10 +6,12 @@ import { db, defaultSettings } from '../../db/database'
 import type { Theme } from '../../domain/models'
 import { formatDateTime } from '../../lib/date'
 import { analyzeBackup, createBackup, downloadBackup, importBackup, markBackupExported, type ImportPlan } from '../../services/backupService'
-import { enableSync, login, logout, syncNow } from '../../services/syncService'
+import { backupBeforeFirstSync, enableSync, syncNow } from '../../services/syncService'
+import { login, logout, useAuth } from '../../services/authService'
 import { updateDailyReviewLimit, updateTheme } from '../../repositories/settingsRepository'
 
 export function SettingsPage() {
+  const auth = useAuth()
   const inputRef = useRef<HTMLInputElement>(null)
   const settings = useLiveQuery(() => db.settings.get('singleton'), []) ?? defaultSettings
   const metadata = useLiveQuery(() => db.deviceMetadata.get('singleton'), [])
@@ -71,11 +73,7 @@ export function SettingsPage() {
     try {
       const firstEnable = !syncMetadata?.enabledAt
       if (firstEnable) {
-        const confirmed = window.confirm('首次开启同步前会先下载一份本地 JSON 备份，然后与云端合并；不会清空或静默覆盖当前数据。是否继续？')
-        if (!confirmed) return
-        const backup = await createBackup()
-        downloadBackup(backup)
-        await markBackupExported(backup.exportedAt)
+        if (!await backupBeforeFirstSync()) return
       }
       await login(password)
       setPassword('')
@@ -88,17 +86,25 @@ export function SettingsPage() {
   }
   async function runSync() {
     setSyncBusy(true); setMessage(''); setError('')
-    try { await syncNow(); setMessage('云同步完成。') }
+    try {
+      if (!syncMetadata?.enabledAt) {
+        if (!await backupBeforeFirstSync()) return
+        await enableSync()
+      } else await syncNow()
+      setMessage('云同步完成。')
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : '同步失败') }
     finally { setSyncBusy(false) }
   }
   async function signOut() {
-    await logout(); setMessage('已退出云同步登录，本地数据仍可正常使用。')
+    try { await logout(); setMessage('已退出云同步登录，本地数据仍可正常使用。') }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '退出失败') }
   }
 
   const statusText = ({
-    unauthenticated: '未登录', syncing: '同步中', synced: '已同步', offline: '离线待同步', error: '同步失败', conflict: '发生冲突'
-  } as const)[syncMetadata?.status ?? 'unauthenticated']
+    idle: '未启动', syncing: '合并中', synced: '已同步', offline: '离线待同步', error: '同步失败', conflict: '冲突'
+  } as const)[syncMetadata?.status ?? 'idle']
+  const authText = ({ checking: '检查中', unauthenticated: '未登录', authenticated: '已登录' } as const)[auth.status]
 
   return <div className="page narrow-page">
     <header className="page-header"><div><p className="overline">偏好与数据</p><h1>设置</h1></div></header>
@@ -106,11 +112,13 @@ export function SettingsPage() {
     <section className="settings-card"><div className="settings-title"><Database /><div><h2>每日复习上限</h2><p>控制每天重新遇见的笔记数量</p></div></div><select aria-label="每日复习上限" value={settings.dailyReviewLimit} onChange={(event) => void updateDailyReviewLimit(Number(event.target.value) as 5 | 10 | 20)}><option value="5">5 条</option><option value="10">10 条</option><option value="20">20 条</option></select></section>
     <section className="settings-section"><h2>云同步</h2><div className="prose-card">
       <div className="settings-title"><Cloud /><div><h3>Cloudflare D1</h3><p>离线修改仍会立即保存在本机，联网后再同步。</p></div></div>
-      <p><strong>状态：{statusText}</strong></p>
-      {syncMetadata?.status === 'unauthenticated' && <label className="field-group"><span>同步密码</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入 Cloudflare 中配置的同步密码" /></label>}
+      <p><strong>状态：<span data-testid="auth-status">{authText}</span> · <span data-testid="sync-status">{statusText}</span></strong></p>
+      <p className="muted">版本：{import.meta.env.APP_COMMIT ?? 'local'} · {window.location.origin}</p>
+      {auth.lastError && <p className="form-error">会话检查：{auth.lastError}</p>}
+      {auth.status !== 'authenticated' && <label className="field-group"><span>同步密码</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入 Cloudflare 中配置的同步密码" /></label>}
       <p className="muted">密码只用于本次登录请求，不会保存到 IndexedDB、源码或构建产物。登录成功后使用安全的 HttpOnly Cookie。</p>
       <div className="form-actions">
-        {syncMetadata?.status === 'unauthenticated' ? <button type="button" className="primary-button" disabled={syncBusy} onClick={() => void authenticateAndSync()}>{syncBusy ? '登录中…' : syncMetadata.enabledAt ? '登录并同步' : '备份并开启同步'}</button> : <><button type="button" onClick={() => void signOut()}>退出登录</button><button type="button" className="primary-button" disabled={syncBusy} onClick={() => void runSync()}>{syncBusy ? '同步中…' : '立即同步'}</button></>}
+        {auth.status !== 'authenticated' ? <button type="button" className="primary-button" disabled={syncBusy} onClick={() => void authenticateAndSync()}>{syncBusy ? '登录中…' : syncMetadata?.enabledAt ? '登录并同步' : '备份并开启同步'}</button> : <><button type="button" onClick={() => void signOut()}>退出登录</button><button type="button" className="primary-button" disabled={syncBusy} onClick={() => void runSync()}>{syncBusy ? '合并中…' : '立即同步'}</button></>}
       </div>
       <p className="muted">待同步 {syncCounts.pending} 条 · 冲突 {syncCounts.conflicts} 条{syncMetadata?.lastSyncedAt ? ` · 上次成功 ${formatDateTime(syncMetadata.lastSyncedAt)}` : ''}</p>
       {syncMetadata?.lastError && <p className="form-error">上次同步：{syncMetadata.lastError}</p>}

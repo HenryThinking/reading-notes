@@ -1,4 +1,4 @@
-import { db } from '../db/database'
+import { db, defaultSettings } from '../db/database'
 import type { AppSettings, Note, NoteAddition, Source, SyncEntityPayload, SyncEntityType, SyncOutboxEntry } from '../domain/models'
 
 export function outboxId(entityType: SyncEntityType, entityId: string) {
@@ -23,10 +23,10 @@ export async function seedOutboxFromLocalData() {
       db.sources.toArray(), db.notes.toArray(), db.noteAdditions.toArray(), db.settings.get('singleton')
     ])
     const entries = [
-      ...sources.map((item) => makeOutboxEntry('source', item)),
-      ...notes.map((item) => makeOutboxEntry('note', item)),
-      ...additions.map((item) => makeOutboxEntry('noteAddition', item)),
-      ...(settings ? [makeOutboxEntry('settings', settings)] : [])
+      ...sources.filter((item) => item.syncStatus !== 'synced').map((item) => makeOutboxEntry('source', item)),
+      ...notes.filter((item) => item.syncStatus !== 'synced').map((item) => makeOutboxEntry('note', item)),
+      ...additions.filter((item) => item.syncStatus !== 'synced').map((item) => makeOutboxEntry('noteAddition', item)),
+      ...(settings && settings.syncStatus !== 'synced' && settings.updatedAt !== defaultSettings.updatedAt ? [makeOutboxEntry('settings', settings)] : [])
     ]
     for (const entry of entries) {
       if (!(await db.syncOutbox.get(entry.id))) await db.syncOutbox.put(entry)

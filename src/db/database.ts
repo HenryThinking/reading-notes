@@ -85,6 +85,9 @@ export const defaultSettings: AppSettings = {
 export async function initializeDatabase() {
   if (!(await db.settings.get('singleton'))) await db.settings.put(defaultSettings)
   if (!(await db.syncMetadata.get('singleton'))) {
-    await db.syncMetadata.put({ id: 'singleton', cursor: 0, status: navigator.onLine ? 'unauthenticated' : 'offline' })
+    await db.syncMetadata.put({ id: 'singleton', cursor: 0, status: 'idle' })
   }
+  // Normalize the old combined UI flag only; keep all entities, queues and cursors.
+  const metadata = await db.syncMetadata.get('singleton')
+  if ((metadata?.status as string) === 'unauthenticated') await db.syncMetadata.update('singleton', { status: 'idle' })
 }

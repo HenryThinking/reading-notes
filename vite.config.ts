@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  define: { 'import.meta.env.APP_COMMIT': JSON.stringify(process.env.CF_PAGES_COMMIT_SHA?.slice(0, 7) ?? 'local') },
   plugins: [
     react(),
     tailwindcss(),

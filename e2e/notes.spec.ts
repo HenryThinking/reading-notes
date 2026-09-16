@@ -60,12 +60,14 @@ test('首次加载后应用壳可离线重载', async ({ page, context }) => {
 
 test('首次开启云同步先下载备份再完成合并', async ({ page }) => {
   let submittedPassword = ''
+  let authenticated = false
   await page.route('**/api/auth/session', async (route) => {
-    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ authenticated: false }) })
+    await route.fulfill({ status: authenticated ? 200 : 401, contentType: 'application/json', body: JSON.stringify({ authenticated }) })
   })
   await page.route('**/api/auth/login', async (route) => {
     const body = route.request().postDataJSON() as { password: string }
     submittedPassword = body.password
+    authenticated = true
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true }) })
   })
   await page.route('**/api/sync', async (route) => {
@@ -85,7 +87,7 @@ test('首次开启云同步先下载备份再完成合并', async ({ page }) => 
   })
 
   await page.goto('/settings')
-  await expect(page.getByText('状态：未登录')).toBeVisible()
+  await expect(page.getByTestId('auth-status')).toHaveText('未登录')
   await page.getByLabel('同步密码').fill('只用于本次登录')
   page.once('dialog', (dialog) => dialog.accept())
   const downloadPromise = page.waitForEvent('download')
@@ -93,7 +95,8 @@ test('首次开启云同步先下载备份再完成合并', async ({ page }) => 
   const download = await downloadPromise
 
   expect(download.suggestedFilename()).toMatch(/^shiyenotes-backup-.*\.json$/)
-  expect(submittedPassword).toBe('只用于本次登录')
-  await expect(page.getByText('状态：已同步')).toBeVisible()
+  await expect.poll(() => submittedPassword).toBe('只用于本次登录')
+  await expect(page.getByTestId('sync-status')).toHaveText('已同步')
+  await expect(page.getByTestId('auth-status')).toHaveText('已登录')
   await expect(page.getByRole('status')).toContainText('首次合并同步完成')
 })

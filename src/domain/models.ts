@@ -4,7 +4,7 @@ export type AdditionKind = 'thought' | 'example'
 export type Theme = 'system' | 'light' | 'dark'
 export type SyncStatus = 'pending' | 'synced' | 'conflict'
 export type SyncEntityType = 'source' | 'note' | 'noteAddition' | 'settings'
-export type SyncUiStatus = 'unauthenticated' | 'syncing' | 'synced' | 'offline' | 'error' | 'conflict'
+export type SyncUiStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error' | 'conflict'
 
 export interface Source {
   id: string

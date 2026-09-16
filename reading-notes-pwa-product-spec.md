@@ -509,7 +509,9 @@ public/
 5. 删除使用 `deletedAt` 墓碑，恢复也作为新版本同步，不即时物理删除。
 6. D1 使用服务器端 `revision`。客户端提交 `baseVersion` 做 compare-and-swap；版本不一致时返回冲突，保留云端原记录并将本地内容保存为可见“冲突副本”，禁止以设备 `updatedAt` 静默决胜。
 7. D1 表结构只通过版本化 migration 管理，查询使用 prepared statements。远端 migration 前先只读检查既有表和数据；非空则停止。
-8. `/api/*` 响应使用 `Cache-Control: no-store`。同步状态至少包括未登录、同步中、已同步、离线待同步、同步失败、发生冲突。
+8. `/api/*` 响应使用 `Cache-Control: no-store`，客户端使用 `credentials: include`。认证与同步状态完全分开：Auth 为检查中/未登录/已登录；Sync 为未启动/合并中/已同步/离线待同步/同步失败/冲突。设置页与同步引擎共用唯一 Auth Store，不持久化认证结论。
+9. App 启动、登录成功、窗口重新获得焦点/可见、网络恢复时检查 Session JSON。确认已登录后立即更新界面，备份确认后启动首次同步；每轮同步先拉取云端，再安全合并上传本地 outbox。网络、5xx 和普通同步错误不得当作退出登录；只有明确 Session false、同步 401 或成功退出会话才改变已确认的登录状态。
+10. 回归测试必须包含两个不共享 Cookie/IndexedDB 的 BrowserContext，通过真实 Pages Functions 与隔离本地 D1 完成创建、云端记录验证、第二端下载、离线编辑及第一端回读，不以 Mock 同步 API 代替双设备测试。
 9. 云同步不等于端到端加密；涉及敏感生活感悟时必须在产品中如实说明。
 
 ## 13. 视觉与交互方向

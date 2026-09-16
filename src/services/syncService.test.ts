@@ -3,12 +3,14 @@ import { db, defaultSettings } from '../db/database'
 import type { Note, Source, SyncResponse } from '../domain/models'
 import { addNoteAddition, createNote, restoreNote, softDeleteNote, updateNote } from '../repositories/noteRepository'
 import { syncNow } from './syncService'
+import { getAuthSnapshot, setAuthStatus } from './authService'
 
 function response(body: SyncResponse, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
 async function enableLocal(cursor = 0) {
+  setAuthStatus('authenticated')
   await db.syncMetadata.put({ id: 'singleton', cursor, status: 'synced', enabledAt: '2026-09-16T00:00:00.000Z' })
 }
 
@@ -26,7 +28,8 @@ describe('syncService', () => {
     await db.open()
     await Promise.all(db.tables.map((table) => table.clear()))
     await db.settings.put(defaultSettings)
-    await db.syncMetadata.put({ id: 'singleton', cursor: 0, status: 'unauthenticated' })
+    setAuthStatus('unauthenticated')
+    await db.syncMetadata.put({ id: 'singleton', cursor: 0, status: 'idle' })
   })
 
   it('首次上传 outbox 变更并更新服务端 revision', async () => {
@@ -36,7 +39,8 @@ describe('syncService', () => {
     await syncNow()
     expect(await db.notes.get(note.id)).toMatchObject({ serverVersion: 1, syncStatus: 'synced' })
     expect(await db.syncOutbox.count()).toBe(0)
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).changes[0]).toMatchObject({ entityType: 'note', baseVersion: 0 })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).changes).toEqual([])
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).changes[0]).toMatchObject({ entityType: 'note', baseVersion: 0 })
   })
 
   it('空本地库可下载云端记录而不清空其他表', async () => {
@@ -103,7 +107,19 @@ describe('syncService', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(response({ accepted: [], conflicts: [], changes: [], cursor: 0, hasMore: false }, 401))
     await expect(syncNow()).rejects.toThrow('登录已失效')
     expect(await db.syncOutbox.count()).toBe(1)
-    expect((await db.syncMetadata.get('singleton'))?.status).toBe('unauthenticated')
+    expect(getAuthSnapshot().status).toBe('unauthenticated')
+    expect((await db.syncMetadata.get('singleton'))?.status).toBe('error')
+  })
+
+  it('同步 5xx 或含登录文字的普通错误不会撤销已确认会话', async () => {
+    const note = await createNote({ context: 'life', excerpt: '', reflection: '本地仍可用', tags: [], reviewEnabled: false })
+    await enableLocal()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ error: '登录服务暂时不可用' }, { status: 503 }))
+    await expect(syncNow()).rejects.toThrow('暂时不可用')
+    expect(getAuthSnapshot().status).toBe('authenticated')
+    expect((await db.syncMetadata.get('singleton'))?.status).toBe('error')
+    expect((await db.notes.get(note.id))?.reflection).toBe('本地仍可用')
+    expect(await db.syncOutbox.count()).toBe(1)
   })
 
   it('版本冲突保留本地副本，并以云端 revision 更新原 ID', async () => {
@@ -117,7 +133,7 @@ describe('syncService', () => {
     let call = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       call += 1
-      if (call === 1) return response({ accepted: [], conflicts: [{ entityType: 'note', id: note.id, serverVersion: 2, payload: remote }], changes: [], cursor: 2, hasMore: false })
+      if (call === 1) return response({ accepted: [], conflicts: [], changes: [{ entityType: 'note', id: note.id, serverVersion: 2, payload: remote }], cursor: 2, hasMore: false })
       return acceptedResponse(init, 3)
     })
     await syncNow()
