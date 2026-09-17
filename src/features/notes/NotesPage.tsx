@@ -32,7 +32,7 @@ export function NotesPage() {
 
   return (
     <div className="page">
-      <header className="page-header"><div><p className="overline">你的私人书架</p><h1>笔记库</h1></div></header>
+      <header className="page-header"><div><p className="overline">摘录与思考，都在这里</p><h1>笔记库</h1></div><span className="library-total">{data?.notes.filter((note) => !note.deletedAt).length ?? 0}<small> 页收藏</small></span></header>
       <label className="search-box"><Search aria-hidden="true" /><span className="sr-only">搜索笔记</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索原文、感悟、例子、标签…" />{query && <button type="button" onClick={() => setQuery('')} aria-label="清空搜索"><X /></button>}</label>
       <div className="library-tabs" role="tablist">
         {([['all', '全部'], ['reading', '读书'], ['life', '生活'], ['favorite', '收藏']] as const).map(([value, label]) => <button role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value)}>{label}</button>)}
@@ -45,7 +45,7 @@ export function NotesPage() {
         {filterCount > 0 && <button type="button" className="text-button" onClick={() => { setSourceId(''); setTag('') }}>清空筛选</button>}
       </div>}
       <p className="result-count">{data === undefined ? '正在查找…' : `${notes.length} 条笔记`}</p>
-      {data !== undefined && notes.length === 0 ? <div className="empty-state"><p>{query || filterCount ? '没有找到符合条件的笔记。' : '笔记库还是空的。'}</p></div> : <><div className="note-list">{notes.slice(0, visibleCount).map((note) => <NoteCard key={note.id} note={note} />)}</div>{notes.length > visibleCount && <button type="button" className="secondary-button load-more" onClick={() => setVisibleCount((count) => count + 100)}>再显示 100 条</button>}</>}
+      {data !== undefined && notes.length === 0 ? <div className="empty-state"><p>{query || filterCount ? '没有找到符合条件的笔记。' : '笔记库还是空的。'}</p></div> : <><div className="note-list">{notes.slice(0, visibleCount).map((note) => <NoteCard key={note.id} note={note} additionCount={data?.additions.filter((item) => item.noteId === note.id && !item.deletedAt).length} />)}</div>{notes.length > visibleCount && <button type="button" className="secondary-button load-more" onClick={() => setVisibleCount((count) => count + 100)}>再显示 100 条</button>}</>}
     </div>
   )
 }

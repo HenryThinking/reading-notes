@@ -2,7 +2,7 @@ import { db } from '../db/database'
 import type { Note, NoteAddition, Source, SyncChange, SyncConflict, SyncEntityPayload, SyncEntityType, SyncResponse, SyncServerChange } from '../domain/models'
 import { createId } from '../lib/ids'
 import { makeOutboxEntry, outboxId, readSyncEntity, seedOutboxFromLocalData, writeSyncEntity } from './outboxService'
-import { getAuthSnapshot, refreshAuthSession, rejectSyncSession } from './authService'
+import { confirmSyncSession, getAuthEpoch, getAuthSnapshot, refreshAuthSession, rejectSyncSession } from './authService'
 
 const MAX_CHANGES_PER_REQUEST = 50
 let activeSync: Promise<void> | undefined
@@ -117,6 +117,7 @@ async function performSync() {
   while (hasMore) {
     if (getAuthSnapshot().status !== 'authenticated') throw new Error('请先确认登录会话')
     const changes = pulling ? [] : await getPendingChanges()
+    const requestEpoch = getAuthEpoch()
     const response = await fetch('/api/sync', {
       method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
@@ -128,6 +129,7 @@ async function performSync() {
       throw new Error(detail?.error || `同步请求失败（${response.status}）`)
     }
     const result = await response.json() as SyncResponse
+    confirmSyncSession(requestEpoch)
     await applyResponse(result, changes)
     cursor = result.cursor
     await db.syncMetadata.update('singleton', { cursor })

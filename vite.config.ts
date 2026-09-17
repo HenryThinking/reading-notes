@@ -10,13 +10,13 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',
-      includeAssets: ['icons/icon.svg'],
+      includeAssets: ['icons/icon.svg', 'icons/apple-touch-icon.png'],
       manifest: {
         name: '拾页',
         short_name: '拾页',
         description: '离线可用的个人读书与生活摘记工具',
-        theme_color: '#315b4a',
-        background_color: '#f6f3eb',
+        theme_color: '#f5f6f3',
+        background_color: '#f5f6f3',
         display: 'standalone',
         start_url: '/',
         lang: 'zh-CN',

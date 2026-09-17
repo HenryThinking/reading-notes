@@ -76,8 +76,8 @@ npx wrangler d1 execute reading-notes-db --remote \
 截至 2026-09-16 的已验证生产版本：
 
 - 唯一正式入口：[https://reading-notes-git.pages.dev](https://reading-notes-git.pages.dev)。不要混用旧 Direct Upload 项目、Preview 地址或单次部署地址；不同域名的本地数据和登录会话相互独立。
-- GitHub：`HenryThinking/reading-notes`，生产分支 `main`，生产 commit `b908e7eccbd947e5c8769ed2d51b6972b5fb3667`。
-- 成功部署 ID：`341bad07-7f61-4529-8138-79266a97ac60`。此记录是验收快照，未来以 Pages 生产部署详情的 commit 为准。
+- GitHub：`HenryThinking/reading-notes`，生产分支 `main`，此前认证/同步分离修复的生产 commit `5fddd36d7ee9541244ddbec9dff33e5e817f7ebc`。
+- 该版本成功部署 ID：`8bba32fb-f684-43c7-a8f3-1db670c0576a`。此记录是历史验收快照；2026-09-17 的界面与状态更新及未来发布，以 Pages 生产部署详情与设置页“版本”的 commit 为准。
 - 既有 D1 已应用 `migrations/0001_initial_sync.sql`，业务表为 `sync_records`、`sync_events`。不要重复初始化数据库，不得修改或删除 Cloudflare 系统表 `_cf_KV`。
 - 生产首页可访问；会话接口返回 JSON；正确登录、数据上传与追加感悟已有生产验证，退出后会话返回 `authenticated:false`。真实电脑/iPhone 双设备、离线往返及冲突验收仍须按下一节完成。
 
@@ -122,7 +122,8 @@ npx wrangler d1 execute reading-notes-db --remote \
 | HTTP 403 | 电脑开发者工具 Network 检查请求是否来自同一正式域名、Origin 是否正确；不关闭同源校验来绕过错误。 |
 | HTTP 503 / 500 | Pages → 生产部署 → View details → Functions 查看请求与异常；核对生产 binding `DB` 和两个加密 Secret 是否配置并经新部署生效，不展示其值。 |
 | API 返回 HTML / 404 / 405 | Pages → Deployments → View details → Build log，检查根目录 `functions/` 是否识别、`/api/*` 路由和生产 commit；不要重复 migration。 |
-| 发生冲突 | 设置查看冲突数；笔记库搜索“冲突副本”，追加内容在详情中有相同标记。比对两份内容，先备份再手动整理，必要时保留两份；本版没有一键解决冲突或清除冲突计数的 UI。 |
+| 发生冲突 | 设置 → 查看与处理冲突：区分“内容有差异”与“内容相同，仅版本或更新时间不同”，查看双方完整快照、删除状态、revision 和详情/副本入口。先备份并核对；可以手动整理，或选择“保留双方并标记已处理”。只标记本机 `resolvedAt`，不覆盖/删除任何版本，处理历史仍可展开查看；其他设备的冲突日志须分别核对。 |
+| 会话请求暂时失败（如 Load failed） | 保留已确认登录状态和本地数据；点击“重试会话检查”或“立即同步”。成功的 Session 检查或真实认证同步响应会清除旧警告；迟到的旧请求不能恢复旧警告或撤销退出登录。若重试仍失败，检查网络、同源请求与 Functions 日志，不清 Cookie/IndexedDB。 |
 
 电脑开发者工具的 Application → IndexedDB → `shiyenotes` 可**只读**检查 `syncMetadata`（状态、错误、游标）、`syncOutbox`（待上传）和 `syncConflicts`（保留的双方内容；设置冲突也记录于此）。Network 重点查看 `/api/auth/*` 与 `/api/sync` 的状态码、Content-Type 和错误 JSON。反馈问题时提供时间、设备、生产 commit、状态码和脱敏错误；不要提供密码、Cookie、Authorization 或未脱敏 HAR/日志。
 
@@ -140,6 +141,16 @@ SELECT name, applied_at FROM d1_migrations ORDER BY id;
 Cloudflare 官方入口说明：[Pages 构建排障](https://developers.cloudflare.com/pages/configuration/debugging-pages/)、[Functions 日志](https://developers.cloudflare.com/pages/functions/debugging-and-logging/)。
 
 ## 备份与恢复
+
+### 界面与状态更新（2026-09-17）
+
+首页和笔记库统一原文优先：摘抄保留换行、最多展示 5 行；“我的思考”以次级字号在下方展示，最多 2 行。仅有感悟时直接展示感悟，不留空原文区域。来源/标签/时间降权，追加感悟仅展示数量。详情与复习始终保留完整内容和时间线。纸白/墨绿主题支持系统深浅色实时切换、44px 主要触控区域和减少动效设置；不更改实体结构或同步协议。
+
+应用图标的唯一可维护源文件是 `public/icons/icon.svg`；运行 `npm run generate:icons` 使用 sharp 生成 192、512、maskable 512 和 iPhone Apple touch 180 PNG。这些属于正式应用资产，应提交；`dist/` 和测试截图不提交。图案为折页、摘录短线和回想箭头，不使用 Apple 标志。已安装 iPhone 可能缓存旧主屏幕图标，请先更新应用并备份，在 Safari 相同正式网址添加一个新快捷图标检查裁切、识别度与启动地址；不要清理站点数据或卸载旧应用来更新图标。桌面浏览器模拟不能代替 iPhone 实机验收。
+
+本次状态修复不涉及后端认证、D1 schema 或 migration。冲突状态表示本机仍有待核对快照，并不表示上一轮上传失败；请求错误与冲突分别展示。核对并标记全部冲突后，无待上传且无新错误时恢复“已同步”；失败或离线不会因标记冲突而被隐藏。
+
+界面验证：`npm run test:e2e` 覆盖有原文、仅感悟、长原文、换行/截断、完整详情与时间线、44px 主要触控和次级文字对比度，截图在忽略的 `test-results/visual/`。运行 `node scripts/create-visual-gallery.mjs` 生成手机/桌面深浅色对照及图标裁切模拟。真实同步 E2E 还验证双设备不同修改 → D1 保留云端版本 → 本机保留副本 → 查看双方 → 标记处理 → 第二设备收到副本。
 
 - **日常备份**：设置 → 导出 JSON 备份，在更换设备、升级、冲突整理及浏览器清理前分别导出。备份含私人笔记，存放于可信位置，不提交 Git。云同步不是独立的历史备份，删除也会传播。
 - **误删恢复**：优先设置 → 回收站 → 恢复，然后同步；其他设备拉取后应恢复原记录。不要修改 D1 墓碑字段或物理删除记录。

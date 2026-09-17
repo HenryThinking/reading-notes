@@ -1,4 +1,4 @@
-import { BookOpen, Home, Library, Plus, RotateCcw, Settings } from 'lucide-react'
+import { Home, Library, Plus, RotateCcw, Settings } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useTheme } from '../hooks/useTheme'
 import { UpdatePrompt } from '../components/ui/UpdatePrompt'
@@ -30,7 +30,7 @@ export function AppShell() {
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
-        <NavLink to="/" className="brand"><BookOpen aria-hidden="true" /><span>拾页</span></NavLink>
+        <NavLink to="/" className="brand"><img src="/icons/icon.svg" alt="" /><span>拾页<small>留一页，给以后的自己</small></span></NavLink>
         <nav>
           {navigation.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>

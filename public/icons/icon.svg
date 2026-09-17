@@ -1,6 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#315b4a"/>
-  <path d="M142 118h105c31 0 56 25 56 56v220c-16-17-38-25-66-25h-95V118Z" fill="#f6f3eb"/>
-  <path d="M370 118H265c-31 0-56 25-56 56v220c16-17 38-25 66-25h95V118Z" fill="#e1eadf" opacity=".92"/>
-  <path d="M256 171v198" stroke="#315b4a" stroke-width="16" stroke-linecap="round" opacity=".35"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>拾页：书页上的摘录与回想</title>
+  <rect width="512" height="512" fill="#365b49"/>
+  <g id="page-mark">
+    <path d="M154 126h148l56 58v176c0 14-11 26-26 26H154c-14 0-26-12-26-26V152c0-14 12-26 26-26Z" fill="#f4f1e6"/>
+    <path d="M302 126v42c0 10 7 16 16 16h40" fill="#d0decd"/>
+    <path d="M178 215h112M178 250h82" stroke="#365b49" stroke-width="15" stroke-linecap="round"/>
+    <path d="M299 302a49 49 0 1 1-27 91" fill="none" stroke="#b9d1b8" stroke-width="17" stroke-linecap="round"/>
+    <path d="m306 281-24 21 27 17" fill="none" stroke="#b9d1b8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 </svg>

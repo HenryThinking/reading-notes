@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { getAuthSnapshot, login, logout, refreshAuthSession, setAuthStatus } from './authService'
+import { confirmSyncSession, getAuthEpoch, getAuthSnapshot, login, logout, refreshAuthSession, setAuthStatus } from './authService'
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -51,5 +51,33 @@ it('A delayed old session response cannot undo successful logout', async () => {
   await logout()
   finish(Response.json({ authenticated: true }))
   await pending
+  expect(getAuthSnapshot().status).toBe('unauthenticated')
+})
+
+it('Successful sync clears a stale session error and invalidates a delayed failed probe', async () => {
+  setAuthStatus('authenticated', 'Load failed')
+  let fail!: (error: Error) => void
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((_resolve, reject) => { fail = reject }))
+  const pending = refreshAuthSession()
+  confirmSyncSession(getAuthEpoch())
+  expect(getAuthSnapshot()).toEqual({ status: 'authenticated', lastError: undefined })
+  fail(new Error('old Load failed'))
+  await pending
+  expect(getAuthSnapshot().lastError).toBeUndefined()
+})
+
+it('Successful session retry clears old transport errors', async () => {
+  setAuthStatus('authenticated', 'Load failed')
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ authenticated: true }))
+  await refreshAuthSession()
+  expect(getAuthSnapshot().lastError).toBeUndefined()
+})
+
+it('A delayed successful sync cannot undo logout or a sync 401', async () => {
+  setAuthStatus('authenticated')
+  const requestEpoch = getAuthEpoch()
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ authenticated: false }))
+  await logout()
+  confirmSyncSession(requestEpoch)
   expect(getAuthSnapshot().status).toBe('unauthenticated')
 })

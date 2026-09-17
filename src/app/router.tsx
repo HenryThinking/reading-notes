@@ -17,6 +17,7 @@ export const router = createBrowserRouter([
       { path: '/review', lazy: async () => ({ Component: (await import('../features/review/ReviewPage')).ReviewPage }) },
       { path: '/settings', lazy: async () => ({ Component: (await import('../features/settings/SettingsPage')).SettingsPage }) },
       { path: '/settings/trash', lazy: async () => ({ Component: (await import('../features/settings/TrashPage')).TrashPage }) },
+      { path: '/settings/conflicts', lazy: async () => ({ Component: (await import('../features/settings/ConflictsPage')).ConflictsPage }) },
       { path: '*', lazy: async () => ({ Component: (await import('../features/NotFoundPage')).NotFoundPage }) }
     ]
   }

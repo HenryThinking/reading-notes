@@ -8,6 +8,14 @@ let sessionCheck: Promise<boolean> | undefined
 let epoch = 0
 
 export function getAuthSnapshot() { return snapshot }
+export function getAuthEpoch() { return epoch }
+// A successful authenticated API response is newer evidence than an old failed
+// session probe. Never let an in-flight response resurrect a logged-out session.
+export function confirmSyncSession(requestEpoch: number) {
+  if (requestEpoch !== epoch || snapshot.status !== 'authenticated') return
+  epoch += 1
+  setAuthStatus('authenticated')
+}
 export function setAuthStatus(status: AuthStatus, lastError?: string) {
   snapshot = { status, lastError }
   listeners.forEach((listener) => listener())

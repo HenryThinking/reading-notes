@@ -10,7 +10,7 @@ const compiled = resolve(compiledDirectory, 'index.js')
 const build = spawnSync(process.execPath, [
   resolve('node_modules/wrangler/bin/wrangler.js'), 'pages', 'functions', 'build',
   '--outdir', compiledDirectory
-], { stdio: 'inherit' })
+], { stdio: 'inherit', env: { ...process.env, WRANGLER_LOG_PATH: resolve('.wrangler/sync-e2e/logs') } })
 if (build.status !== 0) process.exit(build.status ?? 1)
 
 const password = randomBytes(32).toString('hex')
@@ -29,6 +29,15 @@ const mf = new Miniflare(convertV4MiniflareOptions({
       const url = new URL(request.url)
       // Test-only inspection endpoints on loopback; no production resources.
       if (url.pathname === '/__test/credentials') return Response.json({ password }, { headers: { 'Cache-Control': 'no-store' } })
+      if (url.pathname === '/__test/shutdown' && request.method === 'POST') {
+        // Playwright's Windows process-tree termination can hang with workerd.
+        // Stop only this ephemeral loopback harness, never a deployed service.
+        setTimeout(() => {
+          const deadline = setTimeout(() => process.exit(0), 2000)
+          void mf.dispose().finally(() => { clearTimeout(deadline); process.exit(0) })
+        }, 100)
+        return new Response(null, { status: 202 })
+      }
       if (url.pathname === '/__test/record') {
         const id = url.searchParams.get('id') ?? ''
         const record = await database.prepare('SELECT entity_type, entity_id, revision, payload FROM sync_records WHERE entity_type = ?1 AND entity_id = ?2').bind('note', id).first()

@@ -7,7 +7,7 @@ import type { Theme } from '../../domain/models'
 import { formatDateTime } from '../../lib/date'
 import { analyzeBackup, createBackup, downloadBackup, importBackup, markBackupExported, type ImportPlan } from '../../services/backupService'
 import { backupBeforeFirstSync, enableSync, syncNow } from '../../services/syncService'
-import { login, logout, useAuth } from '../../services/authService'
+import { getAuthSnapshot, login, logout, refreshAuthSession, useAuth } from '../../services/authService'
 import { updateDailyReviewLimit, updateTheme } from '../../repositories/settingsRepository'
 
 export function SettingsPage() {
@@ -26,6 +26,7 @@ export function SettingsPage() {
   const [plan, setPlan] = useState<ImportPlan>()
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [syncError, setSyncError] = useState<{ message: string; successfulSyncAt?: string }>()
   const [password, setPassword] = useState('')
   const [syncBusy, setSyncBusy] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<Event & { prompt: () => Promise<void> }>()
@@ -68,8 +69,8 @@ export function SettingsPage() {
     setMessage(granted ? '浏览器已允许持久存储。仍建议定期导出备份。' : '浏览器未授予持久存储，请继续定期导出备份。')
   }
   async function authenticateAndSync() {
-    if (!password) { setError('请输入同步密码'); return }
-    setSyncBusy(true); setMessage(''); setError('')
+    if (!password) { setSyncError({ message: '请输入同步密码', successfulSyncAt: syncMetadata?.lastSyncedAt }); return }
+    setSyncBusy(true); setMessage(''); setSyncError(undefined)
     try {
       const firstEnable = !syncMetadata?.enabledAt
       if (firstEnable) {
@@ -81,11 +82,11 @@ export function SettingsPage() {
       else await syncNow()
       setMessage(firstEnable ? '本地备份已生成，首次合并同步完成。' : '登录并同步完成。')
     }
-    catch (caught) { setError(caught instanceof Error ? caught.message : '同步失败') }
+    catch (caught) { setSyncError({ message: caught instanceof Error ? caught.message : '同步失败', successfulSyncAt: (await db.syncMetadata.get('singleton'))?.lastSyncedAt }) }
     finally { setSyncBusy(false) }
   }
   async function runSync() {
-    setSyncBusy(true); setMessage(''); setError('')
+    setSyncBusy(true); setMessage(''); setSyncError(undefined)
     try {
       if (!syncMetadata?.enabledAt) {
         if (!await backupBeforeFirstSync()) return
@@ -93,12 +94,28 @@ export function SettingsPage() {
       } else await syncNow()
       setMessage('云同步完成。')
     }
-    catch (caught) { setError(caught instanceof Error ? caught.message : '同步失败') }
+    catch (caught) { setSyncError({ message: caught instanceof Error ? caught.message : '同步失败', successfulSyncAt: (await db.syncMetadata.get('singleton'))?.lastSyncedAt }) }
     finally { setSyncBusy(false) }
   }
   async function signOut() {
+    setSyncError(undefined)
     try { await logout(); setMessage('已退出云同步登录，本地数据仍可正常使用。') }
-    catch (caught) { setError(caught instanceof Error ? caught.message : '退出失败') }
+    catch (caught) { setSyncError({ message: caught instanceof Error ? caught.message : '退出失败', successfulSyncAt: syncMetadata?.lastSyncedAt }) }
+  }
+  async function retrySession() {
+    setSyncBusy(true); setSyncError(undefined); setMessage('')
+    try {
+      const authenticated = await refreshAuthSession()
+      if (getAuthSnapshot().lastError) return
+      if (authenticated) {
+        if (!syncMetadata?.enabledAt) {
+          if (!await backupBeforeFirstSync()) return
+          await enableSync()
+        } else await syncNow()
+      }
+      setMessage(authenticated ? '会话已确认，同步完成。' : '会话已检查，请重新登录。')
+    } catch (caught) { setSyncError({ message: caught instanceof Error ? caught.message : '重试失败', successfulSyncAt: (await db.syncMetadata.get('singleton'))?.lastSyncedAt }) }
+    finally { setSyncBusy(false) }
   }
 
   const statusText = ({
@@ -114,14 +131,16 @@ export function SettingsPage() {
       <div className="settings-title"><Cloud /><div><h3>Cloudflare D1</h3><p>离线修改仍会立即保存在本机，联网后再同步。</p></div></div>
       <p><strong>状态：<span data-testid="auth-status">{authText}</span> · <span data-testid="sync-status">{statusText}</span></strong></p>
       <p className="muted">版本：{import.meta.env.APP_COMMIT ?? 'local'} · {window.location.origin}</p>
-      {auth.lastError && <p className="form-error">会话检查：{auth.lastError}</p>}
+      {auth.lastError && <div className="form-error" role="status"><p>上次会话请求未完成，{auth.status === 'authenticated' ? '已确认的登录状态保留' : '暂时无法确认登录'}。本地笔记不受影响。</p><small>请求详情：{auth.lastError}</small><button type="button" className="secondary-button" disabled={syncBusy} onClick={() => void retrySession()}>重试会话检查</button></div>}
       {auth.status !== 'authenticated' && <label className="field-group"><span>同步密码</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入 Cloudflare 中配置的同步密码" /></label>}
       <p className="muted">密码只用于本次登录请求，不会保存到 IndexedDB、源码或构建产物。登录成功后使用安全的 HttpOnly Cookie。</p>
       <div className="form-actions">
         {auth.status !== 'authenticated' ? <button type="button" className="primary-button" disabled={syncBusy} onClick={() => void authenticateAndSync()}>{syncBusy ? '登录中…' : syncMetadata?.enabledAt ? '登录并同步' : '备份并开启同步'}</button> : <><button type="button" onClick={() => void signOut()}>退出登录</button><button type="button" className="primary-button" disabled={syncBusy} onClick={() => void runSync()}>{syncBusy ? '合并中…' : '立即同步'}</button></>}
       </div>
       <p className="muted">待同步 {syncCounts.pending} 条 · 冲突 {syncCounts.conflicts} 条{syncMetadata?.lastSyncedAt ? ` · 上次成功 ${formatDateTime(syncMetadata.lastSyncedAt)}` : ''}</p>
+      <Link className="settings-action conflict-entry" to="/settings/conflicts"><span><strong>{syncCounts.conflicts ? `查看与处理 ${syncCounts.conflicts} 项冲突` : '查看冲突历史'}</strong><small>区分内容差异与版本差异，双方内容均保留</small></span></Link>
       {syncMetadata?.lastError && <p className="form-error">上次同步：{syncMetadata.lastError}</p>}
+      {syncError && syncError.successfulSyncAt === syncMetadata?.lastSyncedAt && <p className="form-error" role="alert">{syncError.message}</p>}
     </div></section>
     <section className="settings-section"><h2>数据安全</h2><div className="settings-stack">
       <button type="button" className="settings-action" onClick={() => void exportData()}><Download /><span><strong>导出 JSON 备份</strong><small>{metadata?.lastExportedAt ? `本设备上次导出：${formatDateTime(metadata.lastExportedAt)}` : '本设备尚未导出过'}</small></span></button>
