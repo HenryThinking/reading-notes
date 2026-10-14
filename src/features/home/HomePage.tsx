@@ -23,9 +23,13 @@ export function HomePage() {
 
   return (
     <div className="page home-page">
-      <div className="home-brand"><img src="/icons/icon.svg" alt="" /><span>拾页</span><span className="brand-caption">摘录 · 思考 · 重读</span></div>
-      <div className="home-intro"><header className="page-header hero-header"><div><p className="overline">{today}</p><h1 aria-label="把遇见的句子留下来">把遇见的句子<span>留下来</span></h1><p className="hero-description">一页摘录，一点思考。让值得记住的，再次相遇。</p></div></header>
-      <Link to="/notes/new" className="primary-button hero-action"><Plus />记一条</Link></div>
+      <header className="home-header">
+        <div>
+          <p className="home-date">{today}</p>
+          <h1 className="home-title">拾页</h1>
+        </div>
+        <Link to="/notes/new" className="primary-button home-add"><Plus />记一条</Link>
+      </header>
       <Link to="/review" className="review-summary">
         <div><span className="summary-icon"><RotateCcw /></span><div><strong>今日复习</strong><p>{data?.due ? `${data.due} 条笔记等你重逢` : '今天已清空，可以随便翻一条'}</p></div></div>
         <ArrowRight />

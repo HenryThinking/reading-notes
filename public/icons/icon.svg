@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <title>拾页：书页上的摘录与回想</title>
-  <rect width="512" height="512" fill="#365b49"/>
+  <title>拾页</title>
+  <rect width="512" height="512" rx="116" fill="#FFFFFF"/>
   <g id="page-mark">
-    <path d="M154 126h148l56 58v176c0 14-11 26-26 26H154c-14 0-26-12-26-26V152c0-14 12-26 26-26Z" fill="#f4f1e6"/>
-    <path d="M302 126v42c0 10 7 16 16 16h40" fill="#d0decd"/>
-    <path d="M178 215h112M178 250h82" stroke="#365b49" stroke-width="15" stroke-linecap="round"/>
-    <path d="M299 302a49 49 0 1 1-27 91" fill="none" stroke="#b9d1b8" stroke-width="17" stroke-linecap="round"/>
-    <path d="m306 281-24 21 27 17" fill="none" stroke="#b9d1b8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M168 118h116l52 52v150c0 15-12 27-27 27H168c-15 0-27-12-27-27V145c0-15 12-27 27-27Z" fill="#F2F2F7"/>
+    <path d="M284 118v36c0 9 7 16 16 16h36" fill="#E4E4E9"/>
+    <path d="M178 205h120M178 241h84" stroke="#1C1C1E" stroke-width="16" stroke-linecap="round"/>
+    <path d="M272 290a36 36 0 1 1-21 68" fill="none" stroke="#365B49" stroke-width="15" stroke-linecap="round"/>
+    <path d="M258 276l14 14-14 14" fill="none" stroke="#365B49" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>

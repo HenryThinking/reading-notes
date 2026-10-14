@@ -9,7 +9,7 @@ export function useTheme() {
     const apply = () => {
       const dark = settings.theme === 'dark' || (settings.theme === 'system' && media.matches)
       document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#151918' : '#f5f6f3')
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#000000' : '#f2f2f7')
     }
     apply()
     media.addEventListener('change', apply)
